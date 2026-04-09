@@ -100,3 +100,8 @@ Once completed, the pipeline outputs will be saved in the local `outputs/` direc
 
 ## License & Disclaimer
 This is for educational and personal use. Make sure your scraping operations comply with Reddit and Google's Terms of Service.
+
+## Author
+**Sameer Shah** — AI & Full-Stack Developer  
+[Portfolio](https://sameershah-portfolio.vercel.app/) 
+

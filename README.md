@@ -7,7 +7,7 @@
 
 An automated, end-to-end pipeline that discovers trending topics, generates engaging scripts, synthesizes background visuals, renders short-form videos (like Instagram Reels/TikToks), and uploads them directly to Google Drive.
 
-## 🚀 Features
+## Features
 
 - **Automated Topic Discovery**: Scrapes Google Trends and Reddit subreddits to find the most viral, up-to-date topics.
 - **AI Brain (Gemini)**: Utilizes Google's Gemini Flash models to select the best topic, write a catchy video script, and generate engaging social media captions. Includes dynamic rate-limit resilience and model fallbacks.
@@ -16,7 +16,7 @@ An automated, end-to-end pipeline that discovers trending topics, generates enga
 - **Cloud Delivery**: Automatically authenticates via Google Service Accounts and uploads the rendered video and text captions to designated, date-stamped folders in Google Drive.
 - **Headless & Server Modes**: Run the pipeline directly via CLI or deploy the built-in FastAPI module.
 
-## ⚙️ Prerequisites
+## Prerequisites
 
 - Python 3.11 or higher
 - Windows/macOS/Linux
@@ -25,7 +25,7 @@ An automated, end-to-end pipeline that discovers trending topics, generates enga
   - **SiliconFlow API** (for Image Gen)
 - A **Google Cloud Service Account** (`credentials.json`) with Google Drive API enabled.
 
-## 🛠️ Installation
+## Installation
 
 1. **Clone the repository:**
    ```bash
@@ -47,7 +47,7 @@ An automated, end-to-end pipeline that discovers trending topics, generates enga
    playwright install chromium
    ```
 
-## 🔐 Configuration
+## Configuration
 
 1. Copy the example `.env` file:
    ```bash
@@ -61,7 +61,7 @@ An automated, end-to-end pipeline that discovers trending topics, generates enga
    ```
 3. Place your Google Service Account JSON key in the root directory and name it `credentials.json`. Ensure that this service account email is added as an **Editor** to your target Google Drive folder.
 
-## 🎬 Usage
+## Usage
 
 To run the pipeline from start to finish via the command line, use the included CLI script. 
 
@@ -80,7 +80,7 @@ Once completed, the pipeline outputs will be saved in the local `outputs/` direc
 - `*_reel.mp4`: The final 15-second portrait video.
 - `*_content.txt`: The script, captions, and hashtags.
 
-## 📁 Repository Structure
+## Repository Structure
 
 ```text
 ├── core/                  # Configurations, Logging, Pydantic Models 
@@ -98,5 +98,5 @@ Once completed, the pipeline outputs will be saved in the local `outputs/` direc
 └── README.md              # Documentation
 ```
 
-## 🛡️ License & Disclaimer
+## License & Disclaimer
 This is for educational and personal use. Make sure your scraping operations comply with Reddit and Google's Terms of Service.

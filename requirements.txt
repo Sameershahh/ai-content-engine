@@ -1,0 +1,37 @@
+# ── Web Framework ──────────────────────────────
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+python-multipart==0.0.20
+
+# ── Config ─────────────────────────────────────
+python-dotenv==1.1.0
+pydantic==2.11.3
+pydantic-settings==2.9.1
+
+# ── AI / LLM ───────────────────────────────────
+# google-generativeai is DEPRECATED — use google-genai instead
+google-genai==1.10.0
+openai==1.77.0          # SiliconFlow uses OpenAI-compatible SDK
+
+# ── Scraping ───────────────────────────────────
+playwright==1.51.0
+beautifulsoup4==4.13.4
+lxml==5.4.0
+
+# ── Image / Video ──────────────────────────────
+moviepy==2.1.1
+Pillow==11.2.1
+numpy==2.2.4
+httpx==0.28.1
+
+# ── Google Drive ───────────────────────────────
+google-api-python-client==2.167.0
+google-auth==2.40.0
+google-auth-oauthlib==1.2.1
+google-auth-httplib2==0.2.0
+
+# ── Utilities ──────────────────────────────────
+tenacity==9.1.2
+structlog==25.3.0
+aiofiles==24.1.0
+anyio==4.9.0

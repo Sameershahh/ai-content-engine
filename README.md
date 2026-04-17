@@ -1,102 +1,83 @@
-# AI Content Synthesis Engine
+# AI Content Engine
 
-![Python](https://img.shields.io/badge/Python-3.11+-blue.svg)
-![Playwright](https://img.shields.io/badge/Playwright-Web_Scraping-31A8FF.svg)
-![MoviePy](https://img.shields.io/badge/MoviePy-Video_Engine-FF3366.svg)
-![FastAPI](https://img.shields.io/badge/FastAPI-Optional_API-009688.svg)
+The AI Content Engine is a high-performance system designed to automate the creation of short-form video content (Reels, TikToks) and cross-platform social media assets. It leverages advanced Large Language Models (LLMs) and generative media APIs to produce professional-grade videos from a single topic input.
 
-An automated, end-to-end pipeline that discovers trending topics, generates engaging scripts, synthesizes background visuals, renders short-form videos (like Instagram Reels/TikToks), and uploads them directly to Google Drive.
+## Features
 
-## 🚀 Features
+- **Automated Research**: Scrapes trending topics and audience sentiment from social platforms.
+- **Multimodal Generation**:
+    - **Scripting**: Utilizes Gemini 2.x/3.x for viral script development and LinkedIn post generation.
+    - **Voiceover**: High-fidelity narration via SiliconFlow (Fish Audio) with a robust gTTS fallback.
+    - **Visuals**: Dynamic video generation using FLUX/Wan2.1 models with automatic image/gradient fallbacks.
+- **High-End Rendering**: Orchestrated via MoviePy with custom ImageMagick configurations for text overlay and cinematic effects.
+- **Automated Delivery**: Direct integration with Google Drive for asset storage and distribution.
 
-- **Automated Topic Discovery**: Scrapes Google Trends and Reddit subreddits to find the most viral, up-to-date topics.
-- **AI Brain (Gemini)**: Utilizes Google's Gemini Flash models to select the best topic, write a catchy video script, and generate engaging social media captions. Includes dynamic rate-limit resilience and model fallbacks.
-- **Image Generation**: Integrates with SiliconFlow/FLUX to generate cinematic, ultra-HD background images based on the script's mood.
-- **Video Rendering Engine**: Pure Python rendering utilizing `MoviePy 2.x` and `Pillow`, completely bypassing standard external dependencies like ImageMagick for cross-platform stability.
-- **Cloud Delivery**: Automatically authenticates via Google Service Accounts and uploads the rendered video and text captions to designated, date-stamped folders in Google Drive.
-- **Headless & Server Modes**: Run the pipeline directly via CLI or deploy the built-in FastAPI module.
+## System Architecture
 
-## ⚙️ Prerequisites
+The engine follows a modular service-oriented architecture:
 
-- Python 3.11 or higher
-- Windows/macOS/Linux
-- Active API Keys for:
-  - **Google Gemini API** (Google AI Studio)
-  - **SiliconFlow API** (for Image Gen)
-- A **Google Cloud Service Account** (`credentials.json`) with Google Drive API enabled.
+1.  **Core Configuration**: Centralized settings management using Pydantic Settings and strict environment validation.
+2.  **Scraper Service**: Handles topic discovery and data enrichment.
+3.  **AIBrain Service**: Manages LLM orchestration, including robust JSON parsing and model failover logic.
+4.  **Voice Service**: Connects to TTS providers with automatic error handling and local synthesis fallback.
+5.  **Visual Service**: Generates background media (video/images) tailored to the script's emotional context.
+6.  **Video Engine**: Performs the final assembly, synchronizing audio, visuals, and dynamic subtitles.
 
-## 🛠️ Installation
+## Setup Requirements
 
-1. **Clone the repository:**
-   ```bash
-   git clone https://github.com/Sameershahh/ai-content-engine.git
-   cd ai-content-engine
-   ```
+### External Dependencies
 
-2. **Create a virtual environment:**
-   ```bash
-   python -m venv .venv
-   ```
-   *Activate it:*
-   - Windows: `.\.venv\Scripts\activate`
-   - Mac/Linux: `source .venv/bin/activate`
+1.  **Python 3.10+**: Recommended environment.
+2.  **ImageMagick**: Required by MoviePy for text rendering. Ensure the binary path is correctly set in `core/config.py` or your environment variables.
+3.  **FFmpeg**: Required for video transcoding and audio merging.
 
-3. **Install dependencies:**
-   ```bash
-   pip install -r requirements.txt
-   playwright install chromium
-   ```
+### Installation
 
-## 🔐 Configuration
-
-1. Copy the example `.env` file:
-   ```bash
-   cp .env.example .env
-   ```
-2. Open `.env` and fill in your keys:
-   ```env
-   GEMINI_API_KEY="your_google_gemini_key"
-   SILICONFLOW_API_KEY="your_siliconflow_key"
-   GDRIVE_ROOT_FOLDER_ID="your_drive_folder_id"
-   ```
-3. Place your Google Service Account JSON key in the root directory and name it `credentials.json`. Ensure that this service account email is added as an **Editor** to your target Google Drive folder.
-
-## 🎬 Usage
-
-To run the pipeline from start to finish via the command line, use the included CLI script. 
-
-**Run with automatic topic discovery:**
 ```bash
+# Clone the repository
+git clone https://github.com/Sameershahh/ai-content-engine.git
+cd ai-content-engine
+
+# Create and activate a virtual environment
+python -m venv .venv
+source .venv/bin/activate  # On Windows: .venv\Scripts\activate
+
+# Install dependencies
+pip install -r requirements.txt
+```
+
+### Configuration
+
+Create a `.env` file in the root directory based on `.env.example`:
+
+```env
+GEMINI_API_KEY=your_gemini_key
+SILICONFLOW_API_KEY=your_siliconflow_key
+DRIVE_CREDENTIALS_PATH=credentials.json
+# Additional configuration parameters...
+```
+
+## Usage
+
+To generate a new reel and its associated metadata:
+
+```bash
+# Generate content for a specific topic
+python run_pipeline.py "The impact of quantum computing on cybersecurity"
+
+# Direct run with default trending discovery
 python run_pipeline.py
 ```
 
-**Run with a custom topic:**
-```bash
-python run_pipeline.py "How AI is changing the future of software engineering"
-```
+Outputs will be generated in the `outputs/` directory and automatically uploaded to the configured Google Drive folder.
 
-### Outputs
-Once completed, the pipeline outputs will be saved in the local `outputs/` directory and automatically pushed to Google Drive:
-- `*_reel.mp4`: The final 15-second portrait video.
-- `*_content.txt`: The script, captions, and hashtags.
+## Failover Mechanisms
 
-## 📁 Repository Structure
+The system is designed for high availability:
+- **LLM Failover**: If the primary Gemini model is unavailable, the system automatically cycles through fallback models.
+- **TTS Fallback**: If the SiliconFlow API returns a 401 or connection error, the system seamlessly switches to gTTS to ensure the pipeline completes.
+- **Visual Fallback**: If video generation fails, the system transitions to static image generation, and finally to cinematic gradient rendering.
 
-```text
-├── core/                  # Configurations, Logging, Pydantic Models 
-├── services/              # Core Logic / Sub-agents
-│   ├── ai_brain.py        # Gemini API handling & Fallback Logic
-│   ├── scraper.py         # Playwright-based Trends & Reddit scraping
-│   ├── image_gen.py       # SiliconFlow image generation
-│   ├── video_engine.py    # MoviePy 2.x rendering engine (Pillow backend)
-│   ├── drive_uploader.py  # Google Drive API delivery
-│   └── pipeline.py        # Master Orchestrator connecting all services
-├── app/                   # FastAPI Server implementation (Optional)
-├── utils/                 # Utility helpers
-├── run_pipeline.py        # Main CLI Entrypoint
-├── requirements.txt       # Project dependencies
-└── README.md              # Documentation
-```
+## License
 
-## 🛡️ License & Disclaimer
-This is for educational and personal use. Make sure your scraping operations comply with Reddit and Google's Terms of Service.
+This project is specialized for professional content automation. Ensure compliance with API provider terms of service (Google, SiliconFlow) before deployment.

@@ -1,8 +1,10 @@
 """
-services/video_engine.py — MoviePy 2.x MP4 renderer (thread-pool, non-blocking).
-Uses VideoClip(make_frame) pattern — correct for MoviePy 2.x.
-Produces 1080x1920 (9:16 Reel) with timed captions burned over background image.
-No ImageMagick dependency — pure Pillow text rendering.
+services/video_engine.py — High-End MoviePy 2.x MP4 renderer.
+Supports:
+- AI Video Backgrounds (cropped to 9:16)
+- AI Voiceover Integration
+- Dynamic "Pop-in" Subtitles (Word-by-word/Karaoke style)
+- Auto-syncing visuals to audio duration
 """
 from __future__ import annotations
 import asyncio
@@ -10,6 +12,7 @@ import textwrap
 import traceback
 from functools import partial
 from pathlib import Path
+import numpy as np
 
 from core.config import get_settings
 from core.logging import get_logger
@@ -19,204 +22,204 @@ settings = get_settings()
 
 WIDTH, HEIGHT = 1080, 1920
 FPS = 24
-DURATION = 15
-
 
 class VideoEngineService:
     def __init__(self) -> None:
         self._output_dir = Path(settings.output_dir).resolve()
         self._output_dir.mkdir(parents=True, exist_ok=True)
 
-    # ── Core sync renderer (runs in thread pool) ─────────────────────────────
-
     def _render_video_sync(
         self,
-        image_path: Path,
+        visual_path: Path,
+        audio_path: Path,
         script: str,
         topic: str,
         job_id: str,
     ) -> Path:
         try:
-            from moviepy import VideoClip
+            from moviepy import VideoFileClip, AudioFileClip, VideoClip, CompositeVideoClip, vfx
             from PIL import Image, ImageFilter, ImageDraw, ImageFont
-            import numpy as np
 
             output_path = self._output_dir / f"{job_id}_reel.mp4"
             print(f"[VideoEngine] Output path: {output_path}", flush=True)
 
-            # ── Background image ─────────────────────────────────────────────
-            bg = Image.open(image_path).convert("RGB").resize((WIDTH, HEIGHT), Image.LANCZOS)
-            bg = bg.filter(ImageFilter.GaussianBlur(radius=4))
+            # ── 1. Load Audio ────────────────────────────────────────────────
+            audio = AudioFileClip(str(audio_path))
+            duration = audio.duration
+            print(f"[VideoEngine] Audio duration: {duration:.2f}s", flush=True)
 
-            # ── Dark overlay ─────────────────────────────────────────────────
-            overlay = Image.new("RGBA", (WIDTH, HEIGHT), (0, 0, 0, 140))
-            bg_rgba = bg.convert("RGBA")
-            bg_rgba = Image.alpha_composite(bg_rgba, overlay)
-            bg_rgb = bg_rgba.convert("RGB")
-            bg_arr = np.array(bg_rgb)  # pre-computed base frame
+            # ── 2. Load Visual ───────────────────────────────────────────────
+            if visual_path.suffix.lower() in [".mp4", ".mov", ".avi"]:
+                # Video Background
+                bg_clip = VideoFileClip(str(visual_path))
+                # Resize and Crop to 9:16
+                bg_w, bg_h = bg_clip.size
+                target_ratio = WIDTH / HEIGHT
+                if bg_w / bg_h > target_ratio:
+                    # Clip is too wide -> crop sides
+                    new_w = int(bg_h * target_ratio)
+                    bg_clip = bg_clip.cropped(x_center=bg_w/2, width=new_w)
+                else:
+                    # Clip is too tall -> crop top/bottom
+                    new_h = int(bg_w / target_ratio)
+                    bg_clip = bg_clip.cropped(y_center=bg_h/2, height=new_h)
+                
+                bg_clip = bg_clip.resized((WIDTH, HEIGHT))
+                
+                # Loop video if it's shorter than audio
+                if bg_clip.duration < duration:
+                    bg_clip = bg_clip.with_effects([vfx.Loop(duration=duration)])
+                else:
+                    bg_clip = bg_clip.with_duration(duration)
+            else:
+                # Image Background (Fallback)
+                img = Image.open(visual_path).convert("RGB").resize((WIDTH, HEIGHT), Image.LANCZOS)
+                img = img.filter(ImageFilter.GaussianBlur(radius=2))
+                bg_arr = np.array(img)
+                bg_clip = VideoClip(lambda t: bg_arr, duration=duration)
 
-            # ── Caption lines ─────────────────────────────────────────────────
-            lines = [l.strip() for l in script.split("\n") if l.strip()]
-            if not lines:
-                lines = textwrap.wrap(script, width=32)
-            if not lines:
-                lines = ["AI is transforming everything.", "Are you ready?"]
+            # ── 3. Subtitle Generation ───────────────────────────────────────
+            # Split script into words for dynamic pop-in
+            words = script.replace("\n", " ").split()
+            if not words:
+                words = ["AI", "Innovation", "2025"]
+            
+            # Group words into chunks (e.g., 2-3 words at a time)
+            chunks = []
+            chunk_size = 2
+            for i in range(0, len(words), chunk_size):
+                chunks.append(" ".join(words[i:i + chunk_size]))
+            
+            time_per_chunk = duration / len(chunks)
+            font_main = self._load_font(80) # Larger impactful font
+            font_topic = self._load_font(32)
+            
+            topic_text = (topic[:40] + "...").upper() if len(topic) > 40 else topic.upper()
 
-            time_per_line = DURATION / len(lines)
-            font_large = self._load_font(62)
-            font_small = self._load_font(28)
-
-            topic_text = (topic[:48] + "...").upper() if len(topic) > 48 else topic.upper()
-
-            # Pre-render all caption frames as numpy arrays (avoids per-frame PIL overhead)
-            rendered_frames: list[np.ndarray] = []
-            for line_text in lines:
-                frame_img = Image.fromarray(bg_arr.copy())
-                draw = ImageDraw.Draw(frame_img)
-
-                # Topic watermark
+            def make_subtitle_frame(t: float) -> np.ndarray:
+                # Transparent frame for overlays
+                frame = Image.new("RGBA", (WIDTH, HEIGHT), (0, 0, 0, 0))
+                draw = ImageDraw.Draw(frame)
+                
+                # Draw Topic Bar at top
                 self._draw_text_centered(
-                    draw, topic_text, font_small,
-                    y=int(HEIGHT * 0.08), width=WIDTH,
-                    fill=(255, 255, 255),
+                    draw, topic_text, font_topic,
+                    y=int(HEIGHT * 0.1), width=WIDTH,
+                    fill=(255, 255, 0), # Yellow highlight
                 )
 
-                # Caption line(s)
-                wrapped = textwrap.wrap(line_text, width=28)
-                y_start = int(HEIGHT * 0.62)
-                for wline in wrapped:
-                    self._draw_text_centered(
-                        draw, wline, font_large,
-                        y=y_start, width=WIDTH,
-                        fill=(255, 255, 255),
-                        stroke=True,
-                    )
-                    y_start += 76
+                # Find current chunk
+                idx = min(int(t / time_per_chunk), len(chunks) - 1)
+                current_text = chunks[idx].upper()
 
-                rendered_frames.append(np.array(frame_img))
+                # Visual "Pop" effect (simple scale/shadow)
+                self._draw_text_centered(
+                    draw, current_text, font_main,
+                    y=int(HEIGHT * 0.45), width=WIDTH,
+                    fill=(255, 255, 255),
+                    stroke=True,
+                    stroke_width=4
+                )
+                
+                return np.array(frame.convert("RGB"))
 
-            print(f"[VideoEngine] Rendered {len(rendered_frames)} caption frames", flush=True)
+            # We create the subtitles as a make_frame function that will be composited
+            # However, to maintain MoviePy 2.x stability, we can just burn them 
+            # into the bg_clip frames directly or use CompositeVideoClip if we are careful.
+            
+            def final_make_frame(t: float) -> np.ndarray:
+                bg_frame = bg_clip.get_frame(t)
+                # Convert bg_frame to PIL
+                pil_bg = Image.fromarray(bg_frame).convert("RGBA")
+                
+                # Darken slightly for better text contrast
+                overlay = Image.new("RGBA", (WIDTH, HEIGHT), (0, 0, 0, 60))
+                pil_bg = Image.alpha_composite(pil_bg, overlay)
+                
+                # Draw text
+                draw = ImageDraw.Draw(pil_bg)
+                
+                # Draw Topic
+                self._draw_text_centered(
+                    draw, topic_text, font_topic,
+                    y=int(HEIGHT * 0.1), width=WIDTH,
+                    fill=(255, 255, 0),
+                )
 
-            # ── MoviePy make_frame function ───────────────────────────────────
-            def make_frame(t: float) -> np.ndarray:
-                """Returns the correct caption frame for time t."""
-                idx = min(int(t / time_per_line), len(rendered_frames) - 1)
-                return rendered_frames[idx]
+                # Draw Chunk
+                idx = min(int(t / time_per_chunk), len(chunks) - 1)
+                current_text = chunks[idx].upper()
+                self._draw_text_centered(
+                    draw, current_text, font_main,
+                    y=int(HEIGHT * 0.45), width=WIDTH,
+                    fill=(255, 255, 255),
+                    stroke=True,
+                    stroke_width=5
+                )
 
-            # ── Build and write video ─────────────────────────────────────────
-            clip = VideoClip(make_frame, duration=DURATION)
-            clip = clip.with_fps(FPS)
+                return np.array(pil_bg.convert("RGB"))
 
-            print(f"[VideoEngine] Writing MP4...", flush=True)
-            clip.write_videofile(
+            final_clip = VideoClip(final_make_frame, duration=duration)
+            final_clip = final_clip.with_audio(audio)
+            final_clip = final_clip.with_fps(FPS)
+
+            print(f"[VideoEngine] Rendering high-end reel ({duration:.2f}s)...", flush=True)
+            final_clip.write_videofile(
                 str(output_path),
                 fps=FPS,
                 codec="libx264",
-                audio=False,
-                preset="ultrafast",
-                threads=2,
-                logger=None,
+                audio_codec="aac",
+                preset="medium",
+                threads=4,
+                logger=None
             )
-            clip.close()
+            
+            final_clip.close()
+            audio.close()
+            bg_clip.close()
 
-            if not output_path.exists():
-                raise RuntimeError(f"write_videofile completed but file not found: {output_path}")
-
-            file_size = output_path.stat().st_size
-            print(f"[VideoEngine] Done! File: {output_path} ({file_size:,} bytes)", flush=True)
-            logger.info("video_rendered", job_id=job_id, path=str(output_path), size_bytes=file_size)
+            print(f"[VideoEngine] Success! {output_path}", flush=True)
             return output_path
 
         except Exception as exc:
-            tb = traceback.format_exc()
-            print(f"[VideoEngine] RENDER FAILED:\n{tb}", flush=True)
-            logger.error("video_render_failed", job_id=job_id, error=str(exc), trace=tb)
-            raise  # re-raise so pipeline catches it properly
-
-    # ── Helpers ──────────────────────────────────────────────────────────────
+            logger.error("video_render_failed", job_id=job_id, error=str(exc))
+            print(f"[VideoEngine] FAILED: {exc}", flush=True)
+            traceback.print_exc()
+            raise
 
     def _load_font(self, size: int):
         from PIL import ImageFont
         candidates = [
-            "C:/Windows/Fonts/arial.ttf",
-            "C:/Windows/Fonts/segoeui.ttf",
-            "C:/Windows/Fonts/calibri.ttf",
-            "arial.ttf",
+            "C:/Windows/Fonts/impact.ttf", # Impact is great for reels
+            "C:/Windows/Fonts/arialbd.ttf",
+            "C:/Windows/Fonts/segoeuib.ttf",
             "Arial.ttf",
-            "DejaVuSans-Bold.ttf",
-            "DejaVuSans.ttf",
-            "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
         ]
         for c in candidates:
-            try:
-                return ImageFont.truetype(c, size)
-            except (OSError, IOError):
-                continue
+            try: return ImageFont.truetype(c, size)
+            except: continue
         return ImageFont.load_default(size=size)
 
-    def _draw_text_centered(
-        self,
-        draw,
-        text: str,
-        font,
-        y: int,
-        width: int,
-        fill=(255, 255, 255),
-        stroke: bool = False,
-    ) -> None:
+    def _draw_text_centered(self, draw, text, font, y, width, fill, stroke=False, stroke_width=2):
         bbox = draw.textbbox((0, 0), text, font=font)
         text_w = bbox[2] - bbox[0]
         x = (width - text_w) // 2
         if stroke:
-            for dx, dy in [(-2, -2), (2, -2), (-2, 2), (2, 2)]:
-                draw.text((x + dx, y + dy), text, font=font, fill=(0, 0, 0))
+            for dx, dy in [(-stroke_width, -stroke_width), (stroke_width, -stroke_width), 
+                           (-stroke_width, stroke_width), (stroke_width, stroke_width)]:
+                draw.text((x+dx, y+dy), text, font=font, fill=(0,0,0))
         draw.text((x, y), text, font=font, fill=fill)
 
-    # ── Async public API ─────────────────────────────────────────────────────
-
-    async def render_video(
-        self,
-        image_path: Path,
-        script: str,
-        topic: str,
-        job_id: str,
-    ) -> Path:
+    async def render_video(self, visual_path: Path, audio_path: Path, script: str, topic: str, job_id: str) -> Path:
         loop = asyncio.get_running_loop()
         return await loop.run_in_executor(
-            None,
-            partial(self._render_video_sync, image_path, script, topic, job_id),
+            None, partial(self._render_video_sync, visual_path, audio_path, script, topic, job_id)
         )
 
-    async def save_text_assets(
-        self,
-        job_id: str,
-        topic: str,
-        reel_script: str,
-        linkedin_post: str,
-        hashtags: list[str],
-    ) -> Path:
+    async def save_text_assets(self, job_id, topic, script, linkedin, hashtags) -> Path:
         import aiofiles
-
         path = self._output_dir / f"{job_id}_content.txt"
-        tags = " ".join(f"#{h}" for h in hashtags)
-
-        content = (
-            f"TOPIC: {topic}\n"
-            f"{'=' * 60}\n\n"
-            f"REEL SCRIPT (15s)\n"
-            f"{'-' * 40}\n"
-            f"{reel_script}\n\n"
-            f"LINKEDIN POST\n"
-            f"{'-' * 40}\n"
-            f"{linkedin_post}\n\n"
-            f"HASHTAGS\n"
-            f"{'-' * 40}\n"
-            f"{tags}\n"
-        )
+        content = f"TOPIC: {topic}\n\nSCENE SCRIPT:\n{script}\n\nLINKEDIN:\n{linkedin}\n\nTAGS: {' '.join(hashtags)}"
         async with aiofiles.open(path, "w", encoding="utf-8") as f:
             await f.write(content)
-
-        abs_path = path.resolve()
-        print(f"[VideoEngine] Text saved: {abs_path}", flush=True)
-        logger.info("text_assets_saved", job_id=job_id, path=str(abs_path))
         return path

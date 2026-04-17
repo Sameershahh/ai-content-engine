@@ -1,175 +1,120 @@
 """
-services/ai_brain.py — Gemini via google-genai SDK.
-Model fallback chain: tries each model in order on 429/quota errors.
+services/ai_brain.py — Modular Gemini content generation.
+Split into multiple calls to ensure reliability and avoid truncation.
 """
 from __future__ import annotations
 import asyncio
 import json
 import re
-import time
 from functools import partial
 from typing import Optional
 
 from google import genai
 from google.genai import types
 from google.genai.errors import ClientError
-from tenacity import (
-    retry,
-    stop_after_attempt,
-    wait_exponential,
-    retry_if_exception_type,
-)
 
 from core.config import get_settings
-from core.models import TrendingTopic
+from core.models import TrendingTopic, GeneratedContent
 from core.logging import get_logger
 
 logger = get_logger(__name__)
 settings = get_settings()
 
-FALLBACK_MODELS = [
-    "gemini-2.5-flash",
-    "gemini-flash-latest",
-    "gemini-3-flash-preview",
-]
-
+FALLBACK_MODELS = ["gemini-2.0-flash", "gemini-3-flash-preview"]
 
 class AIBrainService:
     def __init__(self) -> None:
         self._client = genai.Client(api_key=settings.gemini_api_key)
         self._model = settings.gemini_model
 
-    def _run_sync(self, prompt: str, model: str) -> str:
-        response = self._client.models.generate_content(
-            model=model,
-            contents=prompt,
-            config=types.GenerateContentConfig(
-                temperature=0.8,
-                max_output_tokens=1500,
-            ),
-        )
-        return response.text
+    @staticmethod
+    def _safe_json(raw: str, key: str, default: str) -> str:
+        """Parse JSON from Gemini response with graceful fallbacks."""
+        # Strip markdown code fences if present
+        cleaned = re.sub(r"```(?:json)?\n?(.*?)```", r"\1", raw, flags=re.DOTALL).strip()
+        # Try strict parse first
+        try:
+            return json.loads(cleaned).get(key, default)
+        except Exception:
+            pass
+        # Try extracting the value with regex (handles truncated JSON)
+        pattern = rf'"{ re.escape(key) }"\s*:\s*"(.*?)"'
+        match = re.search(pattern, cleaned, re.DOTALL)
+        if match:
+            return match.group(1).replace("\\n", "\n")
+        # Last resort: return everything after the colon
+        colon_match = re.search(rf'"{ re.escape(key) }"\s*:\s*', cleaned)
+        if colon_match:
+            return cleaned[colon_match.end():].strip().strip('"').strip()
+        return default
 
-    async def _generate(self, prompt: str) -> str:
-        """Try each model in fallback chain; skip on 429."""
+    async def _generate(self, prompt: str, json_mode: bool = False) -> str:
         loop = asyncio.get_running_loop()
-        last_exc = None
+        models = [self._model] + [m for m in FALLBACK_MODELS if m != self._model]
 
-        # Build trial list: configured model first, then fallbacks (deduped)
-        models_to_try = [self._model] + [m for m in FALLBACK_MODELS if m != self._model]
-
-        for model in models_to_try:
-            try:
-                logger.info("gemini_attempt", model=model)
-                result = await loop.run_in_executor(
-                    None, partial(self._run_sync, prompt, model)
-                )
-                if model != self._model:
-                    logger.info("gemini_fallback_success", model=model)
-                return result
-            except ClientError as e:
-                err_str = str(e)
-                status = getattr(e, "status_code", None) or getattr(e, "code", None)
-                is_quota = status == 429 or "RESOURCE_EXHAUSTED" in err_str or "429" in err_str
-                is_not_found = status == 404 or "NOT_FOUND" in err_str or "404" in err_str
-                if is_quota:
-                    retry_wait = 30  # Default to 30s
-                    # Try to parse exact retry from error if possible
-                    if "retry in" in err_str:
-                        try:
-                            match = re.search(r"retry in ([\d\.]+)s", err_str)
-                            if match:
-                                retry_wait = float(match.group(1)) + 1
-                        except:
-                            pass
-                    
-                    logger.warning("gemini_quota_retry", model=model, wait=retry_wait)
-                    await asyncio.sleep(retry_wait)
-                    
-                    # Retry the SAME model once before moving to next fallback
-                    try:
-                        return await loop.run_in_executor(
-                            None, partial(self._run_sync, prompt, model)
-                        )
-                    except Exception:
-                        logger.warning("gemini_retry_failed", model=model)
-                        last_exc = e
-                        continue  # try next model
-                elif is_not_found:
-                    logger.warning("gemini_model_not_found", model=model)
-                    last_exc = e
-                    continue  # model deprecated/removed — try next
-                raise  # unexpected error — bubble up
-            except Exception as e:
-                last_exc = e
-                logger.warning("gemini_model_error", model=model, error=str(e))
-                continue
-
-        raise RuntimeError(
-            f"All Gemini models quota-exhausted or failed. Last error: {last_exc}"
+        config = types.GenerateContentConfig(
+            temperature=0.2,
+            max_output_tokens=2048,  # Increased to prevent truncation
         )
+        if json_mode:
+            config.response_mime_type = "application/json"
 
-    # ── Topic Selection ──────────────────────────────────────────────────────
+        for model in models:
+            try:
+                print(f"[AIBrain] Attempting {model}...", flush=True)
+                # Capture model in closure explicitly
+                _model = model
+                response = await loop.run_in_executor(
+                    None,
+                    lambda: self._client.models.generate_content(
+                        model=_model, contents=prompt, config=config
+                    ),
+                )
+                return response.text
+            except Exception as e:
+                print(f"[AIBrain] {model} FAILED: {e}", flush=True)
+                logger.warning("gemini_model_failed", model=model, error=str(e))
+                continue
+        raise RuntimeError("All Gemini models failed.")
 
     async def select_best_topic(self, topics: list[TrendingTopic]) -> str:
-        topic_list = "\n".join(
-            f"- [{t.source}] {t.title} (score: {t.score})" for t in topics[:20]
-        )
-        prompt = (
-            "You are a viral content strategist.\n"
-            "Given these trending topics, select the SINGLE best topic for creating "
-            "a 15-second Instagram Reel + LinkedIn post.\n\n"
-            "Criteria: high engagement potential, broad appeal, not politically "
-            "divisive, works for AI/tech/business audience.\n\n"
-            f"Topics:\n{topic_list}\n\n"
-            "Reply with ONLY the chosen topic title. No explanation."
-        )
-        result = await self._generate(prompt)
-        return result.strip().strip('"').strip("'")
+        topic_list = "\n".join(f"- {t.title}" for t in topics[:15])
+        prompt = f"Select the single best viral topic for a 15s AI Reel from this list:\n{topic_list}\nReply with ONLY the title."
+        res = await self._generate(prompt)
+        return res.strip().strip('"')
 
-    # ── Content Generation ───────────────────────────────────────────────────
-
-    async def generate_content(self, topic: str) -> tuple:
+    async def generate_content(self, topic: str) -> tuple[GeneratedContent, str]:
         """
-        Returns (GeneratedContent, image_prompt_str).
-        topic must be a plain string.
+        Modular generation: Script -> LinkedIn -> Visual Prompt.
         """
-        from core.models import GeneratedContent
+        # 1. Script
+        script_prompt = (
+            f"Write a 15-second high-energy educational Reel script about '{topic}'.\n"
+            "Format: JSON with key 'script'. Use \\n for breaks. Max 50 words."
+        )
+        script_raw = await self._generate(script_prompt, json_mode=True)
+        script = self._safe_json(script_raw, "script", "AI is the future.")
 
-        prompt = (
-            "You are a viral content creator for short-form video and LinkedIn.\n\n"
-            f'Topic: "{topic}"\n\n'
-            "Return ONLY a single valid JSON object — no markdown fences, no extra text.\n\n"
-            "{\n"
-            '  "reel_script": "Punchy 15-second Reel script, max 60 words. Hook + 2-3 insights + CTA. Use \\n for line breaks between caption segments.",\n'
-            '  "linkedin_post": "150-200 word LinkedIn post. Professional tone, personal insight, ends with a question.",\n'
-            '  "hashtags": ["eight", "relevant", "hashtags", "no", "hash", "symbol", "in", "array"],\n'
-            '  "image_prompt": "Vivid cinematic Stable Diffusion prompt for a background image representing this topic. No text in image."\n'
-            "}"
+        # 2. LinkedIn & Visual Prompt (Parallel)
+        li_prompt = f"Write a professional 100-word LinkedIn post based on this script: {script}\nReturn JSON with key 'post'."
+        v_prompt = (
+            f"Write a short cinematic AI video prompt for background visuals. "
+            f"Topic: {topic}. Return JSON with key 'visual_prompt'. Max 30 words."
         )
 
-        raw = await self._generate(prompt)
+        tasks = [
+            self._generate(li_prompt, json_mode=True),
+            self._generate(v_prompt, json_mode=True),
+        ]
+        li_raw, v_raw = await asyncio.gather(*tasks)
 
-        # Strip markdown fences if present
-        clean = re.sub(r"```(?:json)?", "", raw).strip().rstrip("`").strip()
-
-        try:
-            data = json.loads(clean)
-        except json.JSONDecodeError:
-            match = re.search(r"\{[\s\S]*\}", clean)
-            if not match:
-                raise ValueError(f"Gemini returned unparseable JSON: {raw[:300]}")
-            data = json.loads(match.group())
+        linkedin = self._safe_json(li_raw, "post", "")
+        visual_prompt = self._safe_json(v_raw, "visual_prompt", f"Cinematic futuristic {topic}")
 
         content = GeneratedContent(
             topic=topic,
-            reel_script=data.get("reel_script", "AI is transforming everything.\nAre you ready?"),
-            linkedin_post=data.get("linkedin_post", ""),
-            hashtags=data.get("hashtags", []),
+            reel_script=script,
+            linkedin_post=linkedin,
+            hashtags=["ai", "innovation", "tech"],
         )
-        image_prompt = data.get(
-            "image_prompt",
-            f"Cinematic futuristic abstract visualization representing {topic}, "
-            "no text, high quality, 8k, dramatic lighting",
-        )
-        return content, image_prompt
+        return content, visual_prompt

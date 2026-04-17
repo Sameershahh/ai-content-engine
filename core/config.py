@@ -2,8 +2,9 @@
 core/config.py — Centralised settings via pydantic-settings.
 """
 from functools import lru_cache
+from typing import Any
 from pydantic_settings import BaseSettings, SettingsConfigDict
-from pydantic import Field
+from pydantic import Field, field_validator
 
 
 class Settings(BaseSettings):
@@ -14,6 +15,13 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
+    @field_validator("*", mode="before")
+    @classmethod
+    def strip_strings(cls, v: Any) -> Any:
+        if isinstance(v, str):
+            return v.strip()
+        return v
+
     # ── Gemini ──────────────────────────────────
     gemini_api_key: str = Field(..., alias="GEMINI_API_KEY")
     gemini_model: str = "gemini-2.5-flash"
@@ -22,6 +30,8 @@ class Settings(BaseSettings):
     siliconflow_api_key: str = Field(..., alias="SILICONFLOW_API_KEY")
     siliconflow_base_url: str = "https://api.siliconflow.cn/v1"
     siliconflow_image_model: str = "black-forest-labs/FLUX.1-schnell"
+    siliconflow_video_model: str = "Wan2.1-T2V-1.3B"
+    siliconflow_tts_model: str = "fishaudio/fish-speech-1.5"
 
     # ── Google Drive ────────────────────────────
     gdrive_credentials_json: str = "credentials.json"

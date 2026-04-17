@@ -50,12 +50,17 @@ pip install -r requirements.txt
 
 Create a `.env` file in the root directory based on `.env.example`:
 
-```env
-GEMINI_API_KEY=your_gemini_key
-SILICONFLOW_API_KEY=your_siliconflow_key
-DRIVE_CREDENTIALS_PATH=credentials.json
-# Additional configuration parameters...
-```
+1. Copy the example `.env` file:
+   ```bash
+   cp .env.example .env
+   ```
+2. Configure your API keys and parameters:
+   ```env
+   GEMINI_API_KEY=your_gemini_key
+   SILICONFLOW_API_KEY=your_siliconflow_key
+   DRIVE_CREDENTIALS_PATH=credentials.json
+   ```
+3. Place your Google Service Account JSON key in the root directory as `credentials.json`. Ensure the service account email is added as an **Editor** to your target Google Drive folder.
 
 ## Usage
 
@@ -78,6 +83,12 @@ The system is designed for high availability:
 - **TTS Fallback**: If the SiliconFlow API returns a 401 or connection error, the system seamlessly switches to gTTS to ensure the pipeline completes.
 - **Visual Fallback**: If video generation fails, the system transitions to static image generation, and finally to cinematic gradient rendering.
 
-## License
+## License & Disclaimer
 
-This project is specialized for professional content automation. Ensure compliance with API provider terms of service (Google, SiliconFlow) before deployment.
+This project is specialized for professional content automation. Ensure compliance with API provider terms of service (Google, SiliconFlow) and platform guidelines (Reddit, LinkedIn) before deployment.
+
+---
+
+**Author**  
+**Sameer Shah** — AI & Full-Stack Developer  
+[Portfolio](https://sameershah-portfolio.vercel.app/)

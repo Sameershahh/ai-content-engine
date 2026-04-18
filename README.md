@@ -11,6 +11,7 @@ The AI Content Engine is a high-performance system designed to automate the crea
     - **Visuals**: Dynamic video generation using FLUX/Wan2.1 models with automatic image/gradient fallbacks.
 - **High-End Rendering**: Orchestrated via MoviePy with custom ImageMagick configurations for text overlay and cinematic effects.
 - **Automated Delivery**: Direct integration with Google Drive for asset storage and distribution.
+- **Active Development**: Regularly updated with new AI model integrations and pipeline optimizations.
 
 ## System Architecture
 
